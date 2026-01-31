@@ -2,9 +2,9 @@ import streamlit as st
 import cv2
 import tempfile
 import torch
-from streamlit_folium import st_folium
+# 1. NEW IMPORT for robust rendering
+import streamlit.components.v1 as components
 from processor import TrafficProcessor
-# NOTE: Removed 'map_video_to_gps' to fix your ImportError
 from gis_utils import create_dashboard_map, convert_to_geojson
 
 # --- PAGE CONFIG ---
@@ -211,37 +211,31 @@ with tab_monitor:
                     status_text.success("✅ Analysis Complete.")
                     break
                 
-                # PROCESS - Accepting 4 values but ignoring the last one
-                # This ensures we don't crash even if processor sends 4 values
+                # PROCESS
                 result = processor.process_frame(
                     frame, st.session_state.counts, st.session_state.counted_ids
                 )
                 
-                # Unpack safely (handle 3 or 4 return values)
                 if len(result) == 4:
                     annotated_frame, updated_counts, updated_ids, _ = result
                 else:
                     annotated_frame, updated_counts, updated_ids = result
                 
-                # UPDATE STATE
                 st.session_state.counts = updated_counts
                 st.session_state.counted_ids = updated_ids
                 
-                # UI UPDATES
                 st_frame.image(annotated_frame, channels="BGR", use_container_width=True)
                 
-                # METRICS
                 m_in_car.metric("Cars", st.session_state.counts["Incoming_Car"])
                 m_in_bike.metric("Bikes", st.session_state.counts["Incoming_Bike"])
                 m_in_heavy.metric("Heavy", st.session_state.counts["Incoming_Truck"] + st.session_state.counts["Incoming_Bus"])
-                
                 m_out_car.metric("Cars", st.session_state.counts["Outgoing_Car"])
                 m_out_bike.metric("Bikes", st.session_state.counts["Outgoing_Bike"])
                 m_out_heavy.metric("Heavy", st.session_state.counts["Outgoing_Truck"] + st.session_state.counts["Outgoing_Bus"])
 
             cap.release()
             st.session_state.processing_complete = True
-            st.rerun() # Force refresh to show final state cleanly
+            st.rerun()
             
         else:
             # 3. STATIC STATS
@@ -261,15 +255,17 @@ with tab_gis:
     col_map, col_data = st.columns([3, 1])
     
     with col_map:
-        # Debug info to prove data exists
         total_cars = sum(st.session_state.counts.values())
         st.caption(f"Visualizing density for {total_cars} detected vehicles...")
         
-        # Create Map using Robust method
+        # Create Robust Map
         folium_map = create_dashboard_map(st.session_state.counts)
         
-        # RENDER MAP with explicit integer width/height to avoid 'blank' issue
-        st_folium(folium_map, width=800, height=600, returned_objects=[])
+        # --- THE FIX: USE STATIC HTML RENDERER ---
+        # This bypasses st_folium bugs and forces the map to draw.
+        # Height is set to 600px.
+        map_html = folium_map._repr_html_()
+        components.html(map_html, height=600)
         
     with col_data:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
