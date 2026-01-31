@@ -5,25 +5,27 @@ from streamlit_folium import st_folium
 from processor import TrafficProcessor
 from gis_utils import create_dashboard_map, convert_to_geojson
 
-# --- PAGE CONFIG ---
 st.set_page_config(page_title="NeST Traffic GIS", page_icon="🚦", layout="wide")
 
-# --- SIDEBAR CONFIG ---
 st.sidebar.title("⚙️ Configuration")
-conf_threshold = st.sidebar.slider("AI Confidence Threshold", 0.25, 1.0, 0.45)
-line_pos = st.sidebar.slider("Detection Line Position", 0.1, 0.9, 0.6)
+model_type = st.sidebar.selectbox("Model", ["yolov8n.pt", "yolov8m.pt"], index=0)
+conf_threshold = st.sidebar.slider("Confidence", 0.25, 1.0, 0.35)
+stop_button = st.sidebar.button("🛑 Stop")
 
-# --- STATE MANAGEMENT ---
+# Initialize complex state for 2-way counting
 if 'counts' not in st.session_state:
-    st.session_state.counts = {"Car": 0, "Bike": 0, "Bus": 0, "Truck": 0}
+    # We now track 8 categories (4 types * 2 directions)
+    categories = ["Car", "Bike", "Bus", "Truck"]
+    st.session_state.counts = {f"{d}_{c}": 0 for d in ["Incoming", "Outgoing"] for c in categories}
+    
+if 'counted_ids' not in st.session_state:
+    st.session_state.counted_ids = set()
 
-# --- MAIN UI ---
 st.title("🚦 AI-Driven Traffic Monitoring System")
-st.caption("Challenge 1: Automated Detection & Categorization from Static Cameras")
+st.caption("Double-Directional Detection @ 1080p")
 
 tab_monitor, tab_gis = st.tabs(["📹 Live Analysis", "🗺️ GIS Dashboard"])
 
-# --- TAB 1: MONITORING ---
 with tab_monitor:
     col_video, col_stats = st.columns([2, 1])
     
@@ -31,63 +33,76 @@ with tab_monitor:
         video_file = st.file_uploader("Upload CCTV Footage", type=['mp4', 'mov', 'avi'])
     
     with col_stats:
-        st.subheader("Real-Time Vehicle Counts")
-        # Initialize placeholders
-        metric_car = st.empty()
-        metric_bike = st.empty()
-        metric_heavy = st.empty()
+        # --- SPLIT METRICS UI ---
+        st.subheader("⬇️ Incoming (Down)")
+        c1, c2, c3 = st.columns(3)
+        in_car = c1.empty()
+        in_bike = c2.empty()
+        in_heavy = c3.empty()
+        
         st.markdown("---")
+        
+        st.subheader("⬆️ Outgoing (Up)")
+        c4, c5, c6 = st.columns(3)
+        out_car = c4.empty()
+        out_bike = c5.empty()
+        out_heavy = c6.empty()
+        
+        status_text = st.empty()
     
     if video_file:
-        processor = TrafficProcessor(confidence=conf_threshold)
+        # Reset Logic
+        current_file_name = video_file.name
+        if 'last_file' not in st.session_state or st.session_state.last_file != current_file_name:
+            st.session_state.counts = {f"{d}_{c}": 0 for d in ["Incoming", "Outgoing"] for c in ["Car", "Bike", "Bus", "Truck"]}
+            st.session_state.counted_ids = set()
+            st.session_state.last_file = current_file_name
+
+        processor = TrafficProcessor(model_path=model_type, confidence=conf_threshold)
         
-        # Save uploaded file to temp (Required for OpenCV)
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(video_file.read())
-        
         cap = cv2.VideoCapture(tfile.name)
         st_frame = col_video.empty()
         
         while cap.isOpened():
+            if stop_button: break
             success, frame = cap.read()
             if not success: break
             
             # Process Frame
-            annotated_frame, updated_counts = processor.process_frame(
-                frame, line_pos, st.session_state.counts
+            annotated_frame, updated_counts, updated_ids = processor.process_frame(
+                frame, st.session_state.counts, st.session_state.counted_ids
             )
             
-            # Update State
             st.session_state.counts = updated_counts
+            st.session_state.counted_ids = updated_ids
             
-            # Update Video Feed
+            # Display Video
             st_frame.image(annotated_frame, channels="BGR", use_container_width=True)
             
-            # Update Metrics
-            metric_car.metric("🚗 Cars", st.session_state.counts["Car"])
-            metric_bike.metric("🏍️ Bikes", st.session_state.counts["Bike"])
-            metric_heavy.metric("🚛 Heavy Vehicles", st.session_state.counts["Truck"] + st.session_state.counts["Bus"])
+            # Display Metrics (Incoming)
+            in_car.metric("Cars", st.session_state.counts["Incoming_Car"])
+            in_bike.metric("Bikes", st.session_state.counts["Incoming_Bike"])
+            in_heavy.metric("Heavy", st.session_state.counts["Incoming_Truck"] + st.session_state.counts["Incoming_Bus"])
+            
+            # Display Metrics (Outgoing)
+            out_car.metric("Cars", st.session_state.counts["Outgoing_Car"])
+            out_bike.metric("Bikes", st.session_state.counts["Outgoing_Bike"])
+            out_heavy.metric("Heavy", st.session_state.counts["Outgoing_Truck"] + st.session_state.counts["Outgoing_Bus"])
 
         cap.release()
 
-# --- TAB 2: GIS VISUALIZATION ---
+# --- TAB 2: GIS (Update for combined counts) ---
 with tab_gis:
-    st.header("📍 GIS & Analytics Layer")
+    st.header("📍 GIS Data Export")
+    # Helper to sum up total traffic for the map
+    total_traffic = sum(st.session_state.counts.values())
     
-    col_map, col_data = st.columns([2, 1])
+    # Simple map showing total density
+    # (For a refined app, you could add arrows for direction, but a heat dot is safer for now)
+    folium_map = create_dashboard_map({"Car": total_traffic, "Bike": 0}) # Hack to reuse existing utils
+    st_folium(folium_map, width="100%", height=500)
     
-    with col_map:
-        folium_map = create_dashboard_map(st.session_state.counts)
-        st_folium(folium_map, width="100%", height=500)
-        
-    with col_data:
-        st.subheader("Export Data")
-        st.write("Download processed traffic data for external GIS tools (ArcGIS/QGIS).")
-        
-        geojson_data = convert_to_geojson(st.session_state.counts)
-        st.download_button(
-            label="Download GeoJSON",
-            data=geojson_data,
-            file_name="traffic_data.json",
-            mime="application/json"
-        )
+    geojson_data = convert_to_geojson(st.session_state.counts)
+    st.download_button("Download Full Report (JSON)", geojson_data, "traffic_report.json", "application/json")
