@@ -9,10 +9,9 @@ st.set_page_config(page_title="NeST Traffic GIS", page_icon="🚦", layout="wide
 
 # --- SIDEBAR ---
 st.sidebar.title("⚙️ Configuration")
-# SWITCHED TO MEDIUM MODEL FOR BETTER ACCURACY
-model_type = st.sidebar.selectbox("Model Type", ["yolov8m.pt", "yolov8n.pt", "yolov8s.pt"], index=0)
+# Default to Nano (n) for speed. Medium (m) is accurate but slow on CPU.
+model_type = st.sidebar.selectbox("Model Type", ["yolov8n.pt", "yolov8m.pt"], index=0)
 conf_threshold = st.sidebar.slider("AI Confidence", 0.25, 1.0, 0.35)
-line_pos = st.sidebar.slider("Line Position", 0.1, 0.9, 0.6)
 stop_button = st.sidebar.button("🛑 Stop Processing")
 
 # --- STATE MANAGEMENT ---
@@ -32,16 +31,15 @@ with tab_monitor:
         video_file = st.file_uploader("Upload CCTV Footage", type=['mp4', 'mov', 'avi'])
     
     with col_stats:
-        st.subheader("Real-Time Vehicle Counts")
+        st.subheader("Total Unique Vehicles")
         metric_car = st.empty()
         metric_bike = st.empty()
         metric_heavy = st.empty()
         st.markdown("---")
         status_text = st.empty()
     
-    # Logic to run only if video is uploaded
     if video_file:
-        # Check if this is a new file upload to reset stats
+        # Reset Logic
         current_file_name = video_file.name
         if 'last_file' not in st.session_state or st.session_state.last_file != current_file_name:
             st.session_state.counts = {"Car": 0, "Bike": 0, "Bus": 0, "Truck": 0}
@@ -56,21 +54,21 @@ with tab_monitor:
         cap = cv2.VideoCapture(tfile.name)
         st_frame = col_video.empty()
         
-        status_text.info("Processing started...")
+        status_text.info(f"Processing with {model_type}...")
         
         while cap.isOpened():
-            # Check for Stop Button
             if stop_button:
-                status_text.warning("Processing stopped by user.")
+                status_text.warning("Stopped.")
                 break
                 
             success, frame = cap.read()
             if not success:
-                status_text.success("Video finished.")
-                break # Stops the loop automatically
+                status_text.success("Finished.")
+                break
             
+            # --- NEW PROCESS CALL (No Line Position) ---
             annotated_frame, updated_counts, updated_ids = processor.process_frame(
-                frame, line_pos, st.session_state.counts, st.session_state.counted_ids
+                frame, st.session_state.counts, st.session_state.counted_ids
             )
             
             # Update State
@@ -85,7 +83,7 @@ with tab_monitor:
 
         cap.release()
 
-# --- TAB 2: GIS VISUALIZATION (Unchanged) ---
+# --- TAB 2: GIS (Unchanged) ---
 with tab_gis:
     st.header("📍 GIS & Analytics Layer")
     col_map, col_data = st.columns([2, 1])
